@@ -1,0 +1,48 @@
+rules_version = '2';
+
+// Bilag storage.
+//
+//   bilag/{cid}/drafts/{draftId}/{file}  — uploaded with a kassekladde line;
+//                                          writable by whoever may book.
+//   bilag/{cid}/{year}/{postId}.{ext}     — the permanent bilag of a posted
+//                                          voucher; written once by postDrafts,
+//                                          never by a client.
+//
+// Long-term immutability is enforced again at bucket level by the archive
+// bucket's retention lock (see docs/infrastruktur.md); these rules are the
+// first line, not the only one.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function roles(cid) {
+      return firestore.get(/databases/(default)/documents/companies/$(cid)/members/$(request.auth.uid)).data.roles;
+    }
+
+    function isMember(cid) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/companies/$(cid)/members/$(request.auth.uid));
+    }
+
+    function canBook(cid) {
+      return isMember(cid) && roles(cid).hasAny(['owner', 'bookkeeper']);
+    }
+
+    match /bilag/{cid}/drafts/{draftId}/{fileName} {
+      allow read: if isMember(cid);
+      allow create, update: if canBook(cid)
+        && request.resource.size > 0
+        && request.resource.size <= 20 * 1024 * 1024
+        && request.resource.contentType in ['application/pdf', 'image/png', 'image/jpeg'];
+      allow delete: if canBook(cid);
+    }
+
+    match /bilag/{cid}/{year}/{fileName} {
+      allow read: if year != 'drafts' && isMember(cid);
+      allow write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

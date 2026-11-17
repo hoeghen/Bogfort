@@ -1,0 +1,36 @@
+{
+  "name": "bogfort",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit && npm --prefix functions run typecheck",
+    "emulators": "firebase emulators:start --project bogfort-local",
+    "test": "npm run test:unit && firebase emulators:exec --only firestore,storage --project bogfort-local \"npm run test:rules && npm run test:functions\"",
+    "test:unit": "vitest run tests/unit",
+    "test:rules": "vitest run tests/rules",
+    "test:functions": "npm --prefix functions run test"
+  },
+  "dependencies": {
+    "firebase": "^11.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "firebase-tools": "^13.35.1",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vite-plugin-pwa": "^0.21.1",
+    "vitest": "^2.1.8"
+  }
+}

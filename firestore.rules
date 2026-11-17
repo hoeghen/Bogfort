@@ -1,0 +1,138 @@
+rules_version = '2';
+
+// Bogført security rules.
+//
+// One principle: a client may only write what is not yet bookkeeping. That is
+// the kassekladde (drafts). Everything that is a record — vouchers, the voucher
+// counter, periods, the audit log — and everything that grants access — members
+// and their roles — is written by Cloud Functions alone, which validate and log
+// in the same transaction. Settings (accounts, VAT rules, company data) also go
+// through functions so every change lands in the audit log.
+//
+// Roles come from companies/{cid}/members/{uid}.roles, so adding a second user
+// later (an auditor, a treasurer) is a data change, not a rules change.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function member(cid) {
+      return get(/databases/$(database)/documents/companies/$(cid)/members/$(request.auth.uid));
+    }
+
+    function isMember(cid) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/companies/$(cid)/members/$(request.auth.uid));
+    }
+
+    function hasAnyRole(cid, roles) {
+      return isMember(cid) && member(cid).data.roles.hasAny(roles);
+    }
+
+    function canBook(cid) {
+      return hasAnyRole(cid, ['owner', 'bookkeeper']);
+    }
+
+    function isNullableString(v, max) {
+      return v == null || (v is string && v.size() <= max);
+    }
+
+    function validAttachment(cid, draftId, a) {
+      return a == null || (
+        a is map
+        && a.keys().hasOnly(['path', 'name', 'contentType', 'size'])
+        && a.path is string
+        && a.path.matches('bilag/' + cid + '/drafts/' + draftId + '/[^/]+')
+        && a.name is string && a.name.size() <= 200
+        && a.contentType in ['application/pdf', 'image/png', 'image/jpeg']
+        && a.size is int && a.size > 0 && a.size <= 20 * 1024 * 1024
+      );
+    }
+
+    function validDraft(cid, draftId, d) {
+      return d.keys().hasOnly([
+          'date', 'text', 'kind', 'amount', 'account', 'contraAccount', 'vatCode',
+          'attachment', 'attachmentPending', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasAll([
+          'date', 'text', 'kind', 'amount', 'account', 'contraAccount', 'vatCode',
+          'attachment', 'attachmentPending', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.date is string && d.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && d.text is string && d.text.size() <= 200
+        && d.kind in ['expense', 'income']
+        && d.amount is int && d.amount > 0 && d.amount < 100000000000000
+        && d.account is string && d.account.size() <= 10
+        && d.contraAccount is string && d.contraAccount.size() <= 10
+        && isNullableString(d.vatCode, 10)
+        && validAttachment(cid, draftId, d.attachment)
+        && d.attachmentPending is bool
+        && d.createdAt is int
+        && d.updatedAt is int;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /companies/{cid} {
+      allow read: if isMember(cid);
+      allow write: if false;
+
+      match /members/{uid} {
+        allow read: if isMember(cid);
+        allow write: if false;
+      }
+
+      match /drafts/{draftId} {
+        allow read: if isMember(cid);
+        allow create: if canBook(cid)
+          && validDraft(cid, draftId, request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update: if canBook(cid)
+          && validDraft(cid, draftId, request.resource.data)
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if canBook(cid);
+      }
+
+      // Posted vouchers: immutable, for everyone, forever. Corrections are new
+      // vouchers created by reverseTransaction.
+      match /transactions/{postId} {
+        allow read: if isMember(cid);
+        allow write: if false;
+      }
+
+      match /accounts/{number} {
+        allow read: if isMember(cid);
+        allow write: if false;
+      }
+
+      match /vat_rules/{code} {
+        allow read: if isMember(cid);
+        allow write: if false;
+      }
+
+      match /periods/{periodId} {
+        allow read: if isMember(cid);
+        allow write: if false;
+      }
+
+      match /reversals/{postId} {
+        allow read: if isMember(cid);
+        allow write: if false;
+      }
+
+      match /counters/{counterId} {
+        allow read: if isMember(cid);
+        allow write: if false;
+      }
+
+      match /auditLog/{entryId} {
+        allow read: if hasAnyRole(cid, ['owner', 'auditor']);
+        allow write: if false;
+      }
+    }
+  }
+}
